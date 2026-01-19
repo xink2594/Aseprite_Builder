@@ -1,0 +1,79 @@
+name: Build Aseprite (Private Use)
+
+on:
+  workflow_dispatch: # 核心：手动触发。你需要在 GitHub Actions 页面点击 "Run workflow" 按钮。
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  fetch-info:
+    name: Fetch Version Info
+    runs-on: ubuntu-latest
+    outputs:
+      release-tag: ${{ steps.aseprite-link.outputs.release-tag }}
+    steps:
+      - name: Fetch Latest Release Tag
+        id: aseprite-link
+        uses: a1393323447/fetch-release@main
+        with:
+          group: aseprite
+          repo: aseprite
+          match: Aseprite-.*?-Source.zip
+
+  build:
+    name: Build Windows x64
+    needs: fetch-info
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Aseprite Source
+        shell: bash
+        run: |
+          git clone --recurse-submodules -j8 https://github.com/aseprite/aseprite --branch ${{ needs.fetch-info.outputs.release-tag }} aseprite-src
+
+      - name: Download Skia (Windows x64)
+        working-directory: aseprite-src
+        shell: bash
+        run: |
+          # 自动匹配 Windows 平台的 Skia 依赖
+          curl -L -o skia.zip https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip
+          unzip skia.zip -d skia
+
+      - name: Setup Environment
+        uses: aseprite/get-ninja@main
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Run CMake
+        shell: bash
+        working-directory: aseprite-src
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+            -DENABLE_TESTS=OFF \
+            -DENABLE_SCRIPTING=ON \
+            -DLAF_BACKEND=skia \
+            -DSKIA_DIR=$(realpath skia) \
+            -DSKIA_LIBRARY_DIR=$(realpath skia/out/Release-x64)
+
+      - name: Compiling
+        shell: bash
+        working-directory: aseprite-src/build
+        run: ninja aseprite
+
+      - name: Prepare Binary Folder
+        shell: bash
+        working-directory: aseprite-src/build/bin
+        run: |
+          # 只保留核心可执行文件和必要的数据文件夹
+          mkdir -p deploy
+          cp aseprite.exe deploy/
+          cp -r data deploy/
+
+      - name: Upload Artifact (Private)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aseprite-${{ needs.fetch-info.outputs.release-tag }}-Windows
+          path: aseprite-src/build/bin/deploy/
+          retention-days: 7 # 7天后自动删除，节省你的 GitHub 存储空间
